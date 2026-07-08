@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ChordSketch</title>
+<link rel="stylesheet" href="css/style.css">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#12131a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ChordSketch">
+</head>
+<body>
+<header class="app-header">
+  <h1>🎹 ChordSketch</h1>
+</header>
+<main>
+  <section id="tab-create" class="tab-panel active">
+    <div class="key-row">
+      <label class="key-label">キー
+        <select id="key-select"></select>
+      </label>
+      <div class="mode-toggle">
+        <button class="mode-btn active" data-mode="major">メジャー</button>
+        <button class="mode-btn" data-mode="minor">マイナー</button>
+      </div>
+      <button id="seventh-toggle" class="seventh-btn">7th</button>
+    </div>
+    <div class="section-head">
+      <h2 class="section-title">コード進行（チップをタップで編集）</h2>
+      <button id="prog-clear" class="clear-btn">🗑 全削除</button>
+    </div>
+    <div id="progression" class="progression"></div>
+    <div class="player-row">
+      <button id="play-toggle" class="play-btn">▶ 再生</button>
+      <label class="key-label">BPM</label>
+      <div class="stepper">
+        <button id="bpm-minus">−</button>
+        <span id="bpm-value">120</span>
+        <button id="bpm-plus">＋</button>
+      </div>
+      <select id="rhythm-select"></select>
+      <button id="drums-toggle" class="seventh-btn active">🥁 ドラム</button>
+      <button id="inst-toggle" class="seventh-btn">🎹 ピアノ音</button>
+    </div>
+    <h2 class="section-title">ダイアトニックコード（タップ＝再生／＋＝進行に追加）</h2>
+    <div id="palette" class="palette"></div>
+    <h2 class="section-title">プリセット進行（タップで読み込み）</h2>
+    <div id="presets" class="preset-grid"></div>
+  </section>
+  <section id="tab-guitar" class="tab-panel">
+    <h2 class="section-title" id="guitar-note">ギターコード（タップで試し弾き）</h2>
+    <div id="guitar-grid" class="guitar-grid"></div>
+  </section>
+  <section id="tab-melody" class="tab-panel">
+    <div class="section-head">
+      <h2 class="section-title">メロディ（下の鍵盤を押すと入力位置▼に音が置かれます）</h2>
+      <button id="melody-clear" class="clear-btn">🗑 全削除</button>
+    </div>
+    <div class="player-row">
+      <button id="melody-preview" class="play-btn">🔊 メロディ試聴</button>
+      <button id="chord-suggest" class="seventh-btn">💡 コード提案</button>
+      <label class="key-label">音の長さ</label>
+      <div class="len-group" id="len-group">
+        <button data-len="1">16分</button>
+        <button data-len="2" class="active">8分</button>
+        <button data-len="4">4分</button>
+        <button data-len="8">2分</button>
+        <button data-len="16">全</button>
+      </div>
+      <div class="stepper">
+        <button id="len-minus" title="選択中の音を短く">−</button>
+        <button id="len-plus" title="選択中の音を長く">＋</button>
+      </div>
+    </div>
+    <div id="suggest-list" class="suggest-list hidden"></div>
+    <div class="player-row">
+      <label class="key-label">長さ（小節）</label>
+      <div class="len-group" id="bars-group">
+        <button data-bars="2">2</button>
+        <button data-bars="4">4</button>
+        <button data-bars="8" class="active">8</button>
+        <button data-bars="16">16</button>
+      </div>
+      <span class="key-label" id="bars-hint">8小節＝Aメロ・Bメロ・サビの標準</span>
+    </div>
+    <div id="pianoroll" class="pianoroll"></div>
+    <div class="player-row">
+      <button id="cursor-back" class="seventh-btn">◀ 戻る</button>
+      <button id="cursor-rest" class="seventh-btn">休符 ▶</button>
+      <span class="key-label" id="cursor-info">入力位置：1小節目・1拍目</span>
+    </div>
+    <div id="melody-keys" class="melody-keys"></div>
+  </section>
+  <section id="tab-library" class="tab-panel">
+    <div class="section-head">
+      <h2 class="section-title">ライブラリ（この端末に保存）</h2>
+      <button id="song-save" class="play-btn">＋ いまの曲を保存</button>
+    </div>
+    <div id="song-list" class="song-list"></div>
+  </section>
+  <section id="tab-settings" class="tab-panel"><p class="placeholder">⚙️ 設定（STEP6で実装予定）</p></section>
+</main>
+<div id="chord-editor" class="modal hidden">
+  <div class="modal-body">
+    <div class="modal-head">
+      <span id="editor-title">コード編集</span>
+      <button id="editor-close" class="icon-btn">✕</button>
+    </div>
+    <div class="editor-tabs" id="editor-cats"></div>
+    <div class="editor-types" id="editor-types"></div>
+    <div class="editor-row">
+      <label>ベース音</label>
+      <select id="editor-bass"></select>
+      <label>拍数</label>
+      <div class="stepper">
+        <button id="beats-minus">−</button>
+        <span id="beats-value">4</span>
+        <button id="beats-plus">＋</button>
+      </div>
+    </div>
+    <div class="editor-row actions">
+      <button id="editor-left">◀ 左へ</button>
+      <button id="editor-right">右へ ▶</button>
+      <button id="editor-play">🔊 試聴</button>
+      <button id="editor-delete" class="danger">削除</button>
+    </div>
+  </div>
+</div>
+<nav class="tab-bar">
+  <button class="tab-btn active" data-tab="create">🎹<span>作る</span></button>
+  <button class="tab-btn" data-tab="guitar">🎸<span>ギター</span></button>
+  <button class="tab-btn" data-tab="melody">🎵<span>メロディ</span></button>
+  <button class="tab-btn" data-tab="library">📚<span>ライブラリ</span></button>
+  <button class="tab-btn" data-tab="settings">⚙️<span>設定</span></button>
+</nav>
+<script src="js/theory.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/guitar.js"></script>
+<script src="js/presets.js"></script>
+<script src="js/sequencer.js"></script>
+<script src="js/app.js"></script>
+<script>
+// PWA：公開URL（https）やローカルサーバーで開いたときだけ有効。file://では何もしない
+if ("serviceWorker" in navigator && location.protocol !== "file:") {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  });
+}
+</script>
+</body>
+</html>

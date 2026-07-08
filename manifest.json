@@ -1,0 +1,14 @@
+{
+  "name": "ChordSketch",
+  "short_name": "ChordSketch",
+  "description": "コード進行とメロディを気軽にスケッチできる作曲アプリ",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#12131a",
+  "theme_color": "#12131a",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

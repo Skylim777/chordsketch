@@ -1,0 +1,274 @@
+:root {
+  --bg: #12131a;
+  --panel: #1c1e28;
+  --text: #eceef5;
+  --sub: #8b90a3;
+  --accent: #5b8cff;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+  padding-top: var(--safe-top);
+}
+button { cursor: pointer; font-family: inherit; }
+
+.app-header { padding: 14px 16px 6px; }
+.app-header h1 { font-size: 18px; }
+main { padding: 12px 16px 90px; }
+
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+.key-row {
+  display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+  background: var(--panel); border-radius: 14px; padding: 12px;
+}
+.key-label { font-size: 13px; color: var(--sub); display: flex; align-items: center; gap: 8px; }
+select {
+  background: #262a38; color: var(--text);
+  border: 1px solid #363b4d; border-radius: 10px;
+  padding: 10px 14px; font-size: 18px;
+}
+.mode-toggle { display: flex; background: #262a38; border-radius: 10px; overflow: hidden; }
+.mode-btn { border: none; background: transparent; color: var(--sub); padding: 10px 16px; font-size: 14px; }
+.mode-btn.active { background: var(--accent); color: #fff; }
+
+.section-title { font-size: 13px; color: var(--sub); margin: 18px 2px 8px; font-weight: normal; }
+.palette { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.chord-btn {
+  background: var(--panel); border: 1px solid #2c3040; border-radius: 14px;
+  color: var(--text); padding: 16px 8px; min-height: 72px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+}
+.chord-btn:active { background: var(--accent); transform: scale(0.97); }
+.chord-name { font-size: 20px; font-weight: bold; }
+.chord-degree { font-size: 12px; color: var(--sub); }
+
+.placeholder { color: var(--sub); text-align: center; padding: 60px 0; }
+
+.tab-bar {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  display: flex; background: #171923; border-top: 1px solid #262a38;
+  padding-bottom: var(--safe-bottom);
+  z-index: 5;  /* 黒鍵などが上にかぶらないように */
+}
+.tab-btn {
+  flex: 1; background: none; border: none; color: var(--sub);
+  font-size: 18px; padding: 8px 0 6px;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+}
+.tab-btn span { font-size: 10px; }
+.tab-btn.active { color: var(--accent); }
+
+/* ---- STEP2: 進行エディタ ---- */
+.seventh-btn {
+  border: 1px solid #363b4d; background: #262a38; color: var(--sub);
+  border-radius: 10px; padding: 10px 14px; font-size: 14px;
+}
+.seventh-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.progression {
+  display: flex; gap: 8px; overflow-x: auto; padding: 10px;
+  background: var(--panel); border-radius: 14px; min-height: 66px;
+}
+.prog-chip {
+  flex: 0 0 auto; border: 1px solid #363b4d; background: #262a38;
+  color: var(--text); border-radius: 12px; padding: 8px 12px;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+}
+.prog-chip .chip-name { font-size: 16px; font-weight: bold; }
+.prog-chip .chip-sub { font-size: 10px; color: var(--sub); }
+.prog-empty { color: var(--sub); font-size: 13px; align-self: center; padding: 0 6px; }
+
+.chord-btn { position: relative; cursor: pointer; user-select: none; }
+.add-btn {
+  position: absolute; top: 6px; right: 6px;
+  width: 26px; height: 26px; border-radius: 8px; border: none;
+  background: #2f3446; color: var(--text); font-size: 15px; line-height: 1;
+}
+.add-btn:active { background: var(--accent); }
+
+.modal {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6);
+  display: flex; align-items: flex-end; justify-content: center; z-index: 10;
+}
+.modal.hidden { display: none; }
+.modal-body {
+  background: var(--panel); border-radius: 18px 18px 0 0;
+  width: 100%; max-width: 560px; padding: 16px 16px calc(16px + var(--safe-bottom));
+  max-height: 80vh; overflow-y: auto;
+}
+.modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.modal-head span { font-weight: bold; font-size: 18px; }
+.icon-btn { background: none; border: none; color: var(--sub); font-size: 18px; padding: 6px; }
+
+.editor-tabs { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 8px; }
+.cat-btn {
+  flex: 0 0 auto; border: none; background: #262a38; color: var(--sub);
+  border-radius: 8px; padding: 8px 10px; font-size: 12px;
+}
+.cat-btn.active { background: var(--accent); color: #fff; }
+.editor-types { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 6px; margin-bottom: 12px; }
+.type-btn {
+  border: 1px solid #363b4d; background: #262a38; color: var(--text);
+  border-radius: 8px; padding: 10px 4px; font-size: 14px;
+}
+.type-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.editor-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.editor-row label { font-size: 12px; color: var(--sub); }
+.stepper { display: flex; align-items: center; gap: 4px; }
+.stepper button {
+  width: 36px; height: 36px; border-radius: 8px; border: 1px solid #363b4d;
+  background: #262a38; color: var(--text); font-size: 18px;
+}
+.stepper span { min-width: 32px; text-align: center; font-size: 16px; }
+.editor-row.actions button {
+  border: 1px solid #363b4d; background: #262a38; color: var(--text);
+  border-radius: 10px; padding: 10px 12px; font-size: 13px;
+}
+.editor-row.actions .danger { color: #ff7a7a; border-color: #5a2c2c; }
+
+/* ---- 進行の全削除ボタン ---- */
+.section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; }
+.clear-btn {
+  flex: 0 0 auto; border: 1px solid #5a2c2c; background: #262a38; color: #ff7a7a;
+  border-radius: 8px; padding: 6px 10px; font-size: 12px; margin: 18px 2px 8px;
+}
+.clear-btn:active { background: #3a2020; }
+
+/* ---- STEP3: 再生・プリセット ---- */
+.player-row {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  background: var(--panel); border-radius: 14px; padding: 10px 12px; margin-top: 10px;
+}
+.play-btn {
+  border: none; background: var(--accent); color: #fff;
+  border-radius: 10px; padding: 10px 16px; font-size: 15px; font-weight: bold;
+}
+.play-btn.playing { background: #ff7a7a; }
+.player-row select { font-size: 14px; padding: 8px 10px; }
+
+.preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.preset-btn {
+  border: 1px solid #2c3040; background: var(--panel); color: var(--text);
+  border-radius: 12px; padding: 10px 10px; text-align: left;
+}
+.preset-btn:active { background: var(--accent); }
+.preset-btn .preset-name { display: block; font-size: 14px; font-weight: bold; }
+.preset-btn .preset-desc { display: block; font-size: 11px; color: var(--sub); margin-top: 2px; }
+
+.prog-chip.playing { border-color: var(--accent); background: #253352; }
+
+/* ---- STEP4: ギター ---- */
+.guitar-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.guitar-card {
+  background: var(--panel); border: 1px solid #2c3040; border-radius: 14px;
+  padding: 10px 6px; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  cursor: pointer; user-select: none;
+}
+.guitar-card:active { border-color: var(--accent); }
+.guitar-order { font-size: 10px; color: var(--sub); }
+.guitar-name { font-size: 16px; font-weight: bold; }
+.guitar-sub { font-size: 10px; color: var(--sub); text-align: center; }
+.chord-svg { width: 110px; height: 128px; }
+
+/* ---- STEP5: メロディ（鍵盤入力＋ピアノロール） ---- */
+.pianoroll {
+  margin-top: 10px; background: var(--panel); border-radius: 14px;
+  padding: 8px; overflow: auto; max-height: 46vh;
+}
+.roll-ruler { display: flex; position: sticky; top: 0; z-index: 3; background: var(--panel); }
+.ruler-cell {
+  flex: 0 0 22px; height: 16px; font-size: 9px; color: var(--sub); cursor: pointer;
+}
+.ruler-cell.bar { color: var(--text); }
+.ruler-cell.cursor { color: #ffd166; font-weight: bold; }
+.roll-row { display: flex; align-items: center; }
+.roll-row.offscale .roll-cell { background: #1e2130; }
+.roll-label {
+  flex: 0 0 44px; position: sticky; left: 0; z-index: 2;
+  background: var(--panel); font-size: 10px; color: #565b6e;
+  padding-right: 6px; text-align: right;
+}
+.roll-label.inscale { color: var(--sub); }
+.roll-label.tonic { color: var(--accent); font-weight: bold; }
+.roll-cell {
+  flex: 0 0 22px; height: 18px; margin: 1px 0;
+  background: #232636; border-left: 1px solid #2c3040;
+}
+.roll-cell.beat { border-left-color: #3a4056; }
+.roll-cell.bar { border-left: 2px solid #4a5270; }
+.roll-cell.cursor { box-shadow: inset 2px 0 0 #ffd166; }
+.roll-cell.on { background: var(--accent); border-radius: 4px 0 0 4px; }
+.roll-cell.tail { background: var(--accent); opacity: 0.55; }
+.roll-cell.tail-end { border-radius: 0 4px 4px 0; }
+.roll-cell.selected { background: #ffd166; opacity: 1; }
+/* 音符の上ではドラッグ編集を優先（スクロールは空きマスで） */
+.roll-cell.on, .roll-cell.tail { touch-action: none; }
+
+.len-group { display: flex; background: #262a38; border-radius: 10px; overflow: hidden; }
+.len-group button {
+  border: none; background: transparent; color: var(--sub);
+  padding: 8px 10px; font-size: 12px;
+}
+.len-group button.active { background: var(--accent); color: #fff; }
+
+.melody-keys {
+  margin-top: 10px; overflow-x: auto;
+  background: var(--panel); border-radius: 14px; padding: 10px;
+}
+.mkeys-inner { position: relative; height: 110px; }
+.mkey-w {
+  position: absolute; top: 0; width: 36px; height: 110px;
+  background: #eceef5; border: 1px solid #12131a; border-radius: 0 0 6px 6px;
+  color: #555; font-size: 9px; text-align: center;
+  display: flex; align-items: flex-end; justify-content: center; padding-bottom: 6px;
+}
+.mkey-w:active { background: #bcd0ff; }
+.mkey-w.tonic { box-shadow: inset 0 -4px 0 var(--accent); }
+.mkey-b {
+  position: absolute; top: 0; width: 26px; height: 66px; z-index: 2;
+  background: #23252e; border: 1px solid #000; border-radius: 0 0 4px 4px;
+}
+.mkey-b:active { background: var(--accent); }
+/* 長押し中にブラウザが選択・スクロールを始めないように（横スクロールは可） */
+.mkey-w, .mkey-b {
+  touch-action: pan-x;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+
+/* ---- 再生ライン・コード提案 ---- */
+.pianoroll { position: relative; }
+.playhead {
+  position: absolute; width: 2px; background: #ff7a7a; border-radius: 1px;
+  pointer-events: none; display: none; z-index: 1;
+}
+.suggest-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.suggest-list.hidden { display: none; }
+.suggest-btn {
+  border: 1px solid #2c3040; background: var(--panel); color: var(--text);
+  border-radius: 12px; padding: 10px 12px; text-align: left;
+}
+.suggest-btn:active { background: var(--accent); }
+.suggest-btn .suggest-name { display: block; font-size: 11px; color: var(--sub); }
+.suggest-btn .suggest-chords { display: block; font-size: 14px; font-weight: bold; margin-top: 2px; }
+
+/* ---- STEP6: ライブラリ（保存） ---- */
+.song-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.song-card {
+  background: var(--panel); border: 1px solid #2c3040; border-radius: 12px;
+  padding: 10px 12px; display: flex; align-items: center; gap: 8px;
+}
+.song-info { flex: 1; min-width: 0; }
+.song-name { display: block; font-size: 14px; font-weight: bold; }
+.song-meta { display: block; font-size: 11px; color: var(--sub); margin-top: 2px; }
+.song-card button {
+  border: 1px solid #363b4d; background: #262a38; color: var(--text);
+  border-radius: 8px; padding: 8px 10px; font-size: 12px; flex: 0 0 auto;
+}
+.song-card .danger { color: #ff7a7a; border-color: #5a2c2c; }
