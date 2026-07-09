@@ -101,7 +101,21 @@
     </div>
     <div id="song-list" class="song-list"></div>
   </section>
-  <section id="tab-settings" class="tab-panel"><p class="placeholder">⚙️ 設定（STEP6で実装予定）</p></section>
+  <section id="tab-settings" class="tab-panel">
+    <h2 class="section-title">端末間共有（Googleスプレッドシートに保存）</h2>
+    <div class="sync-panel">
+      <label class="key-label">GASのURL（公開したウェブアプリのURL）</label>
+      <input id="gas-url" class="sync-input" type="url" placeholder="https://script.google.com/macros/s/…/exec">
+      <div class="sync-row">
+        <button id="sync-upload" class="play-btn">⬆ この端末の曲をアップロード</button>
+      </div>
+      <div class="sync-row">
+        <input id="sync-code" class="sync-input code" type="text" placeholder="共有コード（例：ABC123）" maxlength="8">
+        <button id="sync-download" class="seventh-btn">⬇ 取り込む</button>
+      </div>
+      <p class="sync-note" id="sync-note">「⬆ アップロード」すると共有コードが発行されます。別の端末で同じGASのURLとコードを入力して「⬇ 取り込む」と、ライブラリの曲が同期されます。</p>
+    </div>
+  </section>
 </main>
 <div id="chord-editor" class="modal hidden">
   <div class="modal-body">
