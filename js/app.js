@@ -451,7 +451,7 @@
       delete state.melody[startStep];          // 選択中をもう一度タップ：削除
       melEdit.sel = null;
     } else {
-      melEdit.sel = startStep;                 // まず選択（＋/−や長さボタンで伸び縮み）
+      melEdit.sel = startStep;                 // まず選択（＋/－や長さボタンで伸び縮み）
     }
     renderMelody();
   }
@@ -1136,6 +1136,79 @@
     }, 500);
   }
   document.addEventListener("pointerup", scheduleWorkSave);  // 何か操作したら少し後に自動保存
+
+  // ---- 端末間共有（STEP8。GASのウェブアプリ経由でライブラリを同期） ----
+  const GAS_KEY = "chordsketch.gasUrl";
+  const CODE_KEY = "chordsketch.syncCode";
+  const gasUrlInput = document.getElementById("gas-url");
+  const syncCodeInput = document.getElementById("sync-code");
+  const syncNote = document.getElementById("sync-note");
+
+  gasUrlInput.value = localStorage.getItem(GAS_KEY) || "";
+  syncCodeInput.value = localStorage.getItem(CODE_KEY) || "";
+
+  function gasUrl() {
+    const url = gasUrlInput.value.trim();
+    if (!url.startsWith("https://script.google.com/")) {
+      alert("先に「GASのURL」欄に、公開したウェブアプリのURL（https://script.google.com/…/exec）を貼り付けてください");
+      return null;
+    }
+    localStorage.setItem(GAS_KEY, url);  // 1回貼れば端末ごとに記憶
+    return url;
+  }
+
+  function setSyncNote(msg) { syncNote.textContent = msg; }
+
+  document.getElementById("sync-upload").addEventListener("click", async () => {
+    const url = gasUrl();
+    if (!url) return;
+    const songs = loadSongs();
+    if (songs.length === 0) { alert("先にライブラリに曲を保存してください"); return; }
+    setSyncNote("アップロード中…");
+    try {
+      // ヘッダーを付けない（text/plainのまま）ことでGASのCORS制限を回避
+      const res = await fetch(url, {
+        method: "POST",
+        body: JSON.stringify({ code: syncCodeInput.value.trim(), data: songs })
+      });
+      const out = await res.json();
+      if (!out.ok) throw new Error(out.error || "upload failed");
+      syncCodeInput.value = out.code;
+      localStorage.setItem(CODE_KEY, out.code);
+      setSyncNote("アップロード完了！共有コード「" + out.code + "」を別の端末で入力して「⬇ 取り込む」を押すと同期できます。");
+    } catch (err) {
+      setSyncNote("アップロードに失敗しました。GASのURLと公開設定（アクセス：全員）を確認してください。");
+    }
+  });
+
+  document.getElementById("sync-download").addEventListener("click", async () => {
+    const url = gasUrl();
+    if (!url) return;
+    const code = syncCodeInput.value.trim().toUpperCase();
+    if (!code) { alert("共有コードを入力してください"); return; }
+    setSyncNote("取り込み中…");
+    try {
+      const res = await fetch(url + "?code=" + encodeURIComponent(code));
+      const out = await res.json();
+      if (!out.ok) throw new Error(out.error || "download failed");
+      const remote = typeof out.data === "string" ? JSON.parse(out.data) : (out.data || []);
+      // 同じ曲（作成日時が同じ）は新しい方を残し、それ以外は追加
+      const songs = loadSongs();
+      let added = 0, updated = 0;
+      remote.forEach(r => {
+        const i = songs.findIndex(s => s.createdAt === r.createdAt);
+        if (i < 0) { songs.push(r); added++; }
+        else if ((r.updatedAt || 0) > (songs[i].updatedAt || 0)) { songs[i] = r; updated++; }
+      });
+      songs.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      saveSongs(songs);
+      renderLibrary();
+      localStorage.setItem(CODE_KEY, code);
+      setSyncNote("取り込み完了！追加 " + added + "曲・更新 " + updated + "曲。ライブラリタブで確認できます。");
+    } catch (err) {
+      setSyncNote("取り込みに失敗しました。共有コードとGASのURLを確認してください。");
+    }
+  });
 
   // ---- ボトムタブ切替 ----
   document.querySelectorAll(".tab-btn").forEach(btn => {
