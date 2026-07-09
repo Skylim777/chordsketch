@@ -272,3 +272,17 @@ select {
   border-radius: 8px; padding: 8px 10px; font-size: 12px; flex: 0 0 auto;
 }
 .song-card .danger { color: #ff7a7a; border-color: #5a2c2c; }
+
+/* ---- STEP8: 端末間共有（設定タブ） ---- */
+.sync-panel {
+  background: var(--panel); border-radius: 14px; padding: 12px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.sync-input {
+  width: 100%; background: #262a38; color: var(--text);
+  border: 1px solid #363b4d; border-radius: 10px;
+  padding: 10px 12px; font-size: 14px;
+}
+.sync-input.code { width: auto; flex: 1; text-transform: uppercase; letter-spacing: 2px; }
+.sync-row { display: flex; gap: 8px; align-items: center; }
+.sync-note { font-size: 12px; color: var(--sub); line-height: 1.6; }
