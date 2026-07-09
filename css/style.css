@@ -286,3 +286,16 @@ select {
 .sync-input.code { width: auto; flex: 1; text-transform: uppercase; letter-spacing: 2px; }
 .sync-row { display: flex; gap: 8px; align-items: center; }
 .sync-note { font-size: 12px; color: var(--sub); line-height: 1.6; }
+
+/* ---- STEP9: 鼻歌・ギター単音入力 ---- */
+.hum-panel {
+  background: var(--panel); border-radius: 14px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px;
+}
+.hum-panel.hidden { display: none; }
+.hum-row { display: flex; gap: 10px; align-items: center; }
+.hum-note-label {
+  font-size: 20px; font-weight: 700; min-width: 72px; text-align: center;
+  color: #7ee787;
+}
+#hum-record.recording { background: #b8483b; }
