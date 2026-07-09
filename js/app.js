@@ -1210,6 +1210,156 @@
     }
   });
 
+  // ---- 鼻歌・ギター単音からのメロディ入力（STEP9） ----
+  const humToggle = document.getElementById("hum-toggle");
+  const humPanel = document.getElementById("hum-panel");
+  const humRecord = document.getElementById("hum-record");
+  const humNote = document.getElementById("hum-note");
+  const hum = { on: false, stream: null, analyser: null, buf: null,
+                timer: null, t0: 0, buckets: [] };
+
+  humToggle.addEventListener("click", () => {
+    humPanel.classList.toggle("hidden");
+    if (humPanel.classList.contains("hidden")) humStop(false);
+  });
+
+  // 波形の自己相関から音程（Hz）を推定する定番の方法（鼻歌・ギター単音向け）
+  function detectHz(buf, sampleRate) {
+    let SIZE = buf.length, rms = 0;
+    for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
+    if (Math.sqrt(rms / SIZE) < 0.012) return -1;  // 小さすぎる音は無音扱い
+    let r1 = 0, r2 = SIZE - 1;
+    for (let i = 0; i < SIZE / 2; i++) if (Math.abs(buf[i]) < 0.2) { r1 = i; break; }
+    for (let i = 1; i < SIZE / 2; i++) if (Math.abs(buf[SIZE - i]) < 0.2) { r2 = SIZE - i; break; }
+    const b = buf.slice(r1, r2), N = b.length;
+    if (N < 64) return -1;
+    const c = new Float32Array(N);
+    for (let lag = 0; lag < N; lag++) {
+      let sum = 0;
+      for (let i = 0; i < N - lag; i++) sum += b[i] * b[i + lag];
+      c[lag] = sum;
+    }
+    let d = 0;
+    while (d < N - 1 && c[d] > c[d + 1]) d++;
+    let maxval = -1, maxpos = -1;
+    for (let i = d; i < N; i++) if (c[i] > maxval) { maxval = c[i]; maxpos = i; }
+    if (maxpos <= 0) return -1;
+    let T0 = maxpos;
+    const x1 = c[T0 - 1] || 0, x2 = c[T0], x3 = c[T0 + 1] || 0;
+    const a = (x1 + x3 - 2 * x2) / 2, bb = (x3 - x1) / 2;
+    if (a) T0 = T0 - bb / (2 * a);  // となりとの放物線補間で精度を上げる
+    const hz = sampleRate / T0;
+    return (hz >= 60 && hz <= 1200) ? hz : -1;  // 歌・ギター単音の音域だけ採用
+  }
+
+  function humTick() {
+    const c = AudioEngine.ensureCtx();
+    hum.analyser.getFloatTimeDomainData(hum.buf);
+    const hz = detectHz(hum.buf, c.sampleRate);
+    const midi = hz > 0 ? Math.round(69 + 12 * Math.log2(hz / 440)) : null;
+    humNote.textContent = midi === null ? "─" : noteLabel(midi);
+    if (c.currentTime < hum.t0) { humRecord.textContent = "🎙 カウント中…"; return; }
+    const sec16 = 60 / Sequencer.getBpm() / 4;
+    const step = Math.floor((c.currentTime - hum.t0) / sec16);
+    const maxSteps = melodySteps() - melEdit.cursor;
+    if (step >= maxSteps) { humStop(true); return; }  // メロディの終わりで自動ストップ
+    humRecord.textContent = "■ ストップ（" + (Math.floor((melEdit.cursor + step) / 16) + 1) + "小節目を録音中）";
+    (hum.buckets[step] = hum.buckets[step] || []).push(midi);
+  }
+
+  function humCommit() {
+    // 各16分ステップの多数決 → 同じ音の連続を1つの音符にまとめて置く
+    const steps = hum.buckets.map(list => {
+      const count = {};
+      let best = null, bestN = 0;
+      (list || []).forEach(m => {
+        const k = m === null ? "rest" : String(m);
+        count[k] = (count[k] || 0) + 1;
+        if (count[k] > bestN) { bestN = count[k]; best = k; }
+      });
+      return (best === null || best === "rest") ? null : Number(best);
+    });
+    let placed = 0, i = 0;
+    while (i < steps.length) {
+      const midi = steps[i];
+      let len = 1;
+      while (i + len < steps.length && steps[i + len] === midi) len++;
+      if (midi !== null) {
+        let row = midi - melodyBase();
+        while (row < 0) row += 12;    // 低すぎ・高すぎはオクターブを鍵盤の範囲に寄せる
+        while (row > 24) row -= 12;
+        placeNote(melEdit.cursor + i, row, Math.min(16, len), true, true);
+        placed++;
+      }
+      i += len;
+    }
+    if (placed > 0) {
+      melEdit.cursor = Math.min(melodySteps() - 1, melEdit.cursor + steps.length);
+      renderMelody();
+    }
+    return placed;
+  }
+
+  async function humStart() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      alert("この開き方ではマイクを使えません。公開URL（https）で開いてください");
+      return;
+    }
+    if (Sequencer.isPlaying()) { Sequencer.stop(); updatePlayBtn(); }
+    previewPause();  // 録音中は他の音を止める（マイクが拾ってしまうため）
+    try {
+      hum.stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+      });
+    } catch (err) {
+      alert("マイクを使用できませんでした。ブラウザのマイク許可を確認してください");
+      return;
+    }
+    const c = AudioEngine.ensureCtx();
+    const src = c.createMediaStreamSource(hum.stream);
+    hum.analyser = c.createAnalyser();
+    hum.analyser.fftSize = 2048;
+    src.connect(hum.analyser);           // スピーカーには出さない（ハウリング防止）
+    hum.buf = new Float32Array(hum.analyser.fftSize);
+    hum.buckets = [];
+    // カウント4つ（ピッ・ポッポッポッ）のあとに録音開始
+    const spb = 60 / Sequencer.getBpm();
+    const start = c.currentTime + 0.2;
+    for (let i = 0; i < 4; i++) {
+      const o = c.createOscillator(), g = c.createGain();
+      o.frequency.value = i === 0 ? 1200 : 800;
+      g.gain.setValueAtTime(0.15, start + i * spb);
+      g.gain.exponentialRampToValueAtTime(0.001, start + i * spb + 0.08);
+      o.connect(g).connect(c.destination);
+      o.start(start + i * spb);
+      o.stop(start + i * spb + 0.1);
+    }
+    hum.t0 = start + 4 * spb;
+    hum.on = true;
+    hum.timer = setInterval(humTick, 30);
+    humRecord.textContent = "🎙 カウント中…";
+    humRecord.classList.add("recording");
+  }
+
+  function humStop(commit) {
+    if (!hum.on) return;
+    hum.on = false;
+    if (hum.timer) { clearInterval(hum.timer); hum.timer = null; }
+    if (hum.stream) { hum.stream.getTracks().forEach(t => t.stop()); hum.stream = null; }
+    humRecord.textContent = "⏺ 録音スタート";
+    humRecord.classList.remove("recording");
+    humNote.textContent = "─";
+    if (commit) {
+      const n = humCommit();
+      if (n === 0) alert("音を検出できませんでした。マイクに近づいて、ゆっくりはっきり歌ってみてください");
+    }
+  }
+
+  humRecord.addEventListener("click", () => {
+    if (hum.on) humStop(true);
+    else humStart();
+  });
+
   // ---- ボトムタブ切替 ----
   document.querySelectorAll(".tab-btn").forEach(btn => {
     btn.addEventListener("click", () => {
