@@ -62,6 +62,7 @@
     <div class="player-row">
       <button id="melody-preview" class="play-btn">🔊 メロディ試聴</button>
       <button id="chord-suggest" class="seventh-btn">💡 コード提案</button>
+      <button id="hum-toggle" class="seventh-btn">🎤 鼻歌入力</button>
       <label class="key-label">音の長さ</label>
       <div class="len-group" id="len-group">
         <button data-len="1">16分</button>
@@ -76,6 +77,13 @@
       </div>
     </div>
     <div id="suggest-list" class="suggest-list hidden"></div>
+    <div id="hum-panel" class="hum-panel hidden">
+      <div class="hum-row">
+        <button id="hum-record" class="play-btn">⏺ 録音スタート</button>
+        <span id="hum-note" class="hum-note-label">─</span>
+      </div>
+      <p class="sync-note" id="hum-hint">「⏺ 録音スタート」→ カウント4つのあとに、BPMに合わせて鼻歌やギターの単音を鳴らしてください。止めると入力位置▼からピアノロールに音符が置かれます。マイクは公開URL（https）でのみ使えます。</p>
+    </div>
     <div class="player-row">
       <label class="key-label">長さ（小節）</label>
       <div class="len-group" id="bars-group">
