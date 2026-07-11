@@ -1,6 +1,6 @@
 // ChordSketch - sw.js オフライン用キャッシュ（PWA）
 // コードを更新して公開し直すときは CACHE の番号を v2, v3… と上げる
-const CACHE = "chordsketch-v14";  // 鼻歌解析を0ベース作り直しでv14に
+const CACHE = "chordsketch-v15";  // マイク音量表示＋自動増幅でv15に
 const FILES = [
   "./",
   "./index.html",
