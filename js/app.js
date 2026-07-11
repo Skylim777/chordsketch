@@ -1335,7 +1335,7 @@
       if (recent.length > 5) recent.shift();
     });
 
-    // 3) 短い区間（約0.09秒＝3フレーム）ごとに高さの中央値を取る
+    // 3) 短い区間（約0.09秒＝3フレーム）ごとに高さの中央値を取る（丸める前の小数のまま）
     const CHUNK = 3;
     const chunks = [];
     for (let i = 0; i < sm.length; i += CHUNK) {
@@ -1343,41 +1343,54 @@
       const ms = part.filter(f => f.m !== null).map(f => f.m);
       chunks.push(ms.length * 2 >= part.length ? median(ms) : null);
     }
-    const voicedRaw = chunks.filter(m => m !== null);
-    if (!voicedRaw.length) return 0;
 
-    // 4) 歌全体のチューニングのズレ（半音未満）を測って引いてから半音に丸め、
-    //    キーのスケール音に半音だけ寄せる（丸めこみで音の動きが消えにくくなる）
-    const offset = median(voicedRaw.map(m => m - Math.round(m)));
+    // 4) 「音」に区切る：いまの音の高さから0.8半音以上離れた状態が2区間続いたときだけ新しい音。
+    //    半音の境目で検出がチラチラ揺れても音が増殖しないよう、小数の高さで判定する
+    const rawNotes = [];  // { m: 高さ, sep: 直前に無音があったか }
+    let note = null, cand = null, afterSil = true;
+    const closeNote = () => {
+      if (note && note.ms.length >= 2) rawNotes.push({ m: median(note.ms), sep: note.sep });
+      note = null;
+    };
+    chunks.forEach(m => {
+      if (m === null) { closeNote(); cand = null; afterSil = true; return; }
+      if (!note) { note = { ms: [m], sep: afterSil }; afterSil = false; cand = null; return; }
+      if (Math.abs(m - median(note.ms)) < 0.8) { note.ms.push(m); cand = null; return; }
+      if (cand !== null && Math.abs(m - cand) < 0.8) {
+        closeNote();          // 高さの変化が2区間続いた＝本当に音が変わった
+        note = { ms: [cand, m], sep: false };
+        cand = null;
+      } else {
+        cand = m;             // 1区間だけの外れ値は無視
+      }
+    });
+    closeNote();
+    if (!rawNotes.length) return 0;
+
+    // 5) 歌全体のチューニングのズレ（半音未満）を引いてから半音に丸め、キーのスケール音に寄せる。
+    //    息継ぎなしで同じ高さに丸まった隣同士は1つにまとめる（揺れで割れていただけ）
+    const offset = median(rawNotes.map(n => n.m - Math.round(n.m)));
     const inScale = scaleSet();
-    const q = chunks.map(m => {
-      if (m === null) return null;
-      let v = Math.round(m - offset);
+    const seq = [];
+    rawNotes.forEach(n => {
+      let v = Math.round(n.m - offset);
       const pc = ((v % 12) + 12) % 12;
       if (!inScale[pc]) {
         if (inScale[(pc + 1) % 12]) v += 1;
         else if (inScale[(pc + 11) % 12]) v -= 1;
       }
-      return v;
+      if (seq.length && !n.sep && seq[seq.length - 1] === v) return;
+      seq.push(v);
     });
-
-    // 5) 同じ高さの連続を1つの音にまとめて「音の並び」を作る。
-    //    1区間（約0.1秒未満）しか続かない音は誤検出として捨てる
-    const seq = [];
-    let idx = 0;
-    while (idx < q.length) {
-      const m = q[idx];
-      let run = 1;
-      while (idx + run < q.length && q[idx + run] === m) run++;
-      if (m !== null && run >= 2) seq.push(m);
-      idx += run;
-    }
     if (!seq.length) return 0;
 
     // 6) オクターブ調整は全体で1回だけ：高さの中心が鍵盤2オクターブの真ん中に来るように
     const sortedSeq = seq.slice().sort((a, b) => a - b);
     const center = sortedSeq[Math.floor(sortedSeq.length / 2)];
     const shift = Math.round((melodyBase() + 12 - center) / 12) * 12;
+
+    // 検出した並びを音名で覚えておく（ストップ後にパネルに表示して確認できるように）
+    hum.lastSeq = seq.map(m => noteLabel(m + shift)).join(" ");
 
     // 7) 音の並びをそのまま、入力位置から8分音符ずつ順番に置く
     let placed = 0;
@@ -1460,6 +1473,8 @@
       if (n === 0) {
         const voiced = hum.trace.filter(f => f.m !== null).length;
         alert("音を検出できませんでした。マイクに近づいて、ゆっくりはっきり歌ってみてください\n（記録: " + hum.trace.length + "フレーム / 声と判定: " + voiced + "フレーム）");
+      } else if (hum.lastSeq) {
+        humNote.textContent = "検出: " + hum.lastSeq;  // 拾った音の並びを表示（違うときの手がかりに）
       }
     }
   }
