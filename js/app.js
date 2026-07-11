@@ -1240,7 +1240,7 @@
       c[lag] = sum / (norm * (SIZE - lag) / SIZE);  // 正規化：きれいな周期なら1.0付近
       if (c[lag] > bestVal) { bestVal = c[lag]; bestLag = lag; }
     }
-    if (bestLag < 0 || bestVal < 0.6) return { rms: rms, hz: -1 };  // 周期性が弱い＝音程なし（ノイズ）。判定を厳しく
+    if (bestLag < 0 || bestVal < 0.5) return { rms: rms, hz: -1 };  // 周期性が弱い＝音程なし（ノイズ）
     // 1オクターブ低く誤検出する癖の補正：半分の周期でも相関が強ければ高い方を採用
     const half = Math.round(bestLag / 2);
     if (half >= minLag && c[half] > bestVal * 0.93) bestLag = half;  // 確信が強いときだけ
@@ -1255,7 +1255,9 @@
   function humTick() {
     const c = AudioEngine.ensureCtx();
     hum.analyser.getFloatTimeDomainData(hum.buf);
-    const gate = Math.max(0.01, hum.noise * 3);  // 環境ノイズの3倍より大きな音だけ拾う
+    // 環境ノイズの3倍より大きな音だけ拾う。ただし鳴っている最中は半分まで許して、
+    // 息が弱まった瞬間に音が途切れないようにする（ヒステリシス）
+    const gate = Math.max(0.01, hum.noise * 3) * (hum.cur ? 0.5 : 1);
     const p = detectPitch(hum.buf, c.sampleRate, gate);
     let midi = p.hz > 0 ? Math.round(69 + 12 * Math.log2(p.hz / 440)) : null;
     // メロディのつながり補正：鼻歌は大きく飛ばない前提で、
@@ -1280,11 +1282,11 @@
     humRecord.textContent = "■ ストップ（" + (Math.floor((melEdit.cursor + step) / 16) + 1) + "小節目を録音中）";
 
     if (midi === null) {
-      // 息つぎ・子音などの短い無音（約0.15秒まで）は前の音が続いているとみなしてつなぐ
+      // 息つぎ・子音などの短い無音（約0.2秒まで）は前の音が続いているとみなしてつなぐ
       hum.quiet++;
-      hum.pend = null;
-      if (hum.cur && hum.quiet >= 5) {
-        hum.cur.end = now - 0.15;
+      if (hum.quiet >= 2) hum.pend = null;  // 1フレームだけの取りこぼしでは次の音の判定をリセットしない
+      if (hum.cur && hum.quiet >= 6) {
+        hum.cur.end = now - 0.18;
         hum.events.push(hum.cur);
         hum.cur = null;
       }
@@ -1292,8 +1294,9 @@
     }
     hum.quiet = 0;
     if (hum.cur && midi === hum.cur.midi) { hum.pend = null; return; }  // 同じ音が続いている
-    // 違う音は少し続いてはじめて切り替える。大きく飛ぶ音ほど長めに確認して誤検出を弾く
-    const need = (ref !== null && Math.abs(midi - ref) >= 5) ? 5 : 3;
+    // 違う音は少し続いてはじめて切り替える。
+    // 歌い出しは早めに拾い、鳴っている最中の大ジャンプだけ慎重に確認する
+    const need = !hum.cur ? 2 : (Math.abs(midi - hum.cur.midi) >= 7 ? 4 : 3);
     if (hum.pend && hum.pend.midi === midi) {
       hum.pend.n++;
       if (hum.pend.n >= need) {
@@ -1321,6 +1324,7 @@
       let s = Math.round((ev.start - hum.t0) / sec16);
       let e = Math.round((ev.end - hum.t0) / sec16);
       if (e <= s) e = s + 1;               // 短い音も最低16分音符1つぶん
+      if (placed > 0 && s - lastStep === 1) s = lastStep;  // 16分音符1つだけの隙間は途切れとみなして埋める
       s = Math.max(s, lastStep, 0);        // 前の音符と重ねない
       e = Math.min(e, maxSteps);
       if (s >= maxSteps || e <= s) return;
