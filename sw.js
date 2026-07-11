@@ -1,6 +1,6 @@
 // ChordSketch - sw.js オフライン用キャッシュ（PWA）
 // コードを更新して公開し直すときは CACHE の番号を v2, v3… と上げる
-const CACHE = "chordsketch-v9";  // 音程検出をYIN方式に変更してv9に
+const CACHE = "chordsketch-v10";  // メロディの起伏を残す改善でv10に
 const FILES = [
   "./",
   "./index.html",
