@@ -1243,7 +1243,7 @@
     if (bestLag < 0 || bestVal < 0.6) return { rms: rms, hz: -1 };  // 周期性が弱い＝音程なし（ノイズ）。判定を厳しく
     // 1オクターブ低く誤検出する癖の補正：半分の周期でも相関が強ければ高い方を採用
     const half = Math.round(bestLag / 2);
-    if (half >= minLag && c[half] > bestVal * 0.85) bestLag = half;
+    if (half >= minLag && c[half] > bestVal * 0.93) bestLag = half;  // 確信が強いときだけ
     // となりの相関値と放物線補間して周期を小数精度に
     let T0 = bestLag;
     const x1 = c[bestLag - 1] || 0, x2 = c[bestLag], x3 = c[bestLag + 1] || 0;
@@ -1258,12 +1258,13 @@
     const gate = Math.max(0.01, hum.noise * 3);  // 環境ノイズの3倍より大きな音だけ拾う
     const p = detectPitch(hum.buf, c.sampleRate, gate);
     let midi = p.hz > 0 ? Math.round(69 + 12 * Math.log2(p.hz / 440)) : null;
-    // 直前の音からほぼオクターブ（11〜13半音）飛んだら倍音の誤検出とみなして寄せる
+    // メロディのつながり補正：鼻歌は大きく飛ばない前提で、
+    // 直前の音から9半音以上離れて検出されたら倍音の誤検出とみなして近いオクターブに読み替える
     const ref = hum.cur ? hum.cur.midi
       : hum.events.length ? hum.events[hum.events.length - 1].midi : null;
     if (midi !== null && ref !== null) {
-      if (midi - ref >= 11 && midi - ref <= 13) midi -= 12;
-      else if (ref - midi >= 11 && ref - midi <= 13) midi += 12;
+      while (midi - ref > 8) midi -= 12;
+      while (ref - midi > 8) midi += 12;
     }
     humNote.textContent = midi === null ? "─" : noteLabel(midi);
     if (c.currentTime < hum.t0) {
@@ -1291,10 +1292,11 @@
     }
     hum.quiet = 0;
     if (hum.cur && midi === hum.cur.midi) { hum.pend = null; return; }  // 同じ音が続いている
-    // 違う音は約0.1秒続いてはじめて切り替える（ビブラートや揺れでぶつ切りにしない）
+    // 違う音は少し続いてはじめて切り替える。大きく飛ぶ音ほど長めに確認して誤検出を弾く
+    const need = (ref !== null && Math.abs(midi - ref) >= 5) ? 5 : 3;
     if (hum.pend && hum.pend.midi === midi) {
       hum.pend.n++;
-      if (hum.pend.n >= 3) {
+      if (hum.pend.n >= need) {
         if (hum.cur) { hum.cur.end = hum.pend.at; hum.events.push(hum.cur); }
         hum.cur = { midi: midi, start: hum.pend.at, end: 0 };
         hum.pend = null;
@@ -1308,6 +1310,12 @@
     // 音の区切り（イベント）を16分グリッドに寄せて音符として置く
     const sec16 = 60 / Sequencer.getBpm() / 4;
     const maxSteps = melodySteps() - melEdit.cursor;
+    if (!hum.events.length) return 0;
+    // オクターブ調整は全体でまとめ1回だけ：鼻歌の高さの中心が鍵盤2オクターブの真ん中に来るようにずらす
+    // （1音ずつバラバラに調整すると上下の動き＝メロディの形が壊れるため）
+    const sorted = hum.events.map(ev => ev.midi).sort((a, b) => a - b);
+    const center = sorted[Math.floor(sorted.length / 2)];
+    const shift = Math.round((melodyBase() + 12 - center) / 12) * 12;
     let placed = 0, lastStep = 0;
     hum.events.forEach(ev => {
       let s = Math.round((ev.start - hum.t0) / sec16);
@@ -1316,9 +1324,10 @@
       s = Math.max(s, lastStep, 0);        // 前の音符と重ねない
       e = Math.min(e, maxSteps);
       if (s >= maxSteps || e <= s) return;
-      let row = ev.midi - melodyBase();
-      while (row < 0) row += 12;           // 低すぎ・高すぎはオクターブを鍵盤の範囲に寄せる
-      while (row > 24) row -= 12;
+      let row = ev.midi + shift - melodyBase();
+      if (row < 0) row += 12;              // それでもはみ出す音だけ個別に調整
+      if (row > 24) row -= 12;
+      row = Math.max(0, Math.min(24, row));
       placeNote(melEdit.cursor + s, row, Math.min(16, e - s), true, true);
       lastStep = e;
       placed++;
