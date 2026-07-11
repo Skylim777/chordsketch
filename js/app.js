@@ -1335,77 +1335,63 @@
       if (recent.length > 5) recent.shift();
     });
 
-    // 3) 「音の変わり目」を直接見つけてセグメントに区切る：
-    //    いまの音の高さから0.7半音以上離れた状態が2フレーム続いたら新しい音。
-    //    細かい上がり下がりをつぶさず、同じ音の揺れは1つにまとめる
-    const segs = [];
-    let seg = null, cand = null;
-    sm.forEach(f => {
-      if (f.m === null) {
-        if (seg) { segs.push(seg); seg = null; }
-        cand = null;
-        return;
-      }
-      if (!seg) { seg = { start: f.t, end: f.t, ms: [f.m] }; cand = null; return; }
-      if (Math.abs(f.m - median(seg.ms.slice(-8))) < 0.7) {
-        seg.ms.push(f.m);
-        seg.end = f.t;
-        cand = null;
-        return;
-      }
-      if (cand && Math.abs(f.m - cand.ms[0]) < 0.7) {
-        cand.ms.push(f.m);
-        seg.end = cand.at;
-        segs.push(seg);
-        seg = { start: cand.at, end: f.t, ms: cand.ms };
-        cand = null;
-      } else {
-        cand = { at: f.t, ms: [f.m] };
-      }
-    });
-    if (seg) segs.push(seg);
-    if (!segs.length) return 0;
+    // 3) 16分ステップごとに「そのステップで鳴っていた高さ（小数）の中央値」を求める
+    const steps = [];
+    for (let s = 0; s < maxSteps; s++) {
+      const t1 = hum.t0 + s * sec16, t2 = t1 + sec16;
+      const frames = sm.filter(f => f.t >= t1 && f.t < t2);
+      if (frames.length === 0) break;  // 録音はここで終わっている
+      const ms = frames.filter(f => f.m !== null).map(f => f.m);
+      // 3分の1以上鳴っていれば「音のあるステップ」とみなす（息の弱まりで欠けない）
+      steps.push(ms.length * 3 >= frames.length ? median(ms) : null);
+    }
 
     // 4) 歌全体のチューニングのズレ（半音未満）を測って引いてから半音に丸め、
     //    キーのスケール音に半音だけ寄せる（丸めこみで音の動きが消えにくくなる）
-    const pitches = segs.map(g => median(g.ms));
-    const offset = median(pitches.map(m => m - Math.round(m)));
+    const voicedRaw = steps.filter(m => m !== null);
+    if (!voicedRaw.length) return 0;
+    const offset = median(voicedRaw.map(m => m - Math.round(m)));
     const inScale = scaleSet();
-    const notes = segs.map((g, i) => {
-      let m = Math.round(pitches[i] - offset);
-      const pc = ((m % 12) + 12) % 12;
+    const snap = steps.map(m => {
+      if (m === null) return null;
+      let q = Math.round(m - offset);
+      const pc = ((q % 12) + 12) % 12;
       if (!inScale[pc]) {
-        if (inScale[(pc + 1) % 12]) m += 1;
-        else if (inScale[(pc + 11) % 12]) m -= 1;
+        if (inScale[(pc + 1) % 12]) q += 1;
+        else if (inScale[(pc + 11) % 12]) q -= 1;
       }
-      return { start: g.start, end: g.end, m: m };
+      return q;
     });
 
-    // 5) オクターブ調整は全体で1回だけ：高さの中心が鍵盤2オクターブの真ん中に来るように
-    const sortedM = notes.map(n => n.m).sort((a, b) => a - b);
-    const center = sortedM[Math.floor(sortedM.length / 2)];
+    // 5) 1ステップだけの穴は埋める（高さの動きはならさず、途切れだけ直す）
+    for (let i = 1; i < snap.length - 1; i++) {
+      if (snap[i] === null && snap[i - 1] !== null && snap[i + 1] !== null) snap[i] = snap[i - 1];
+    }
+
+    // 6) オクターブ調整は全体で1回だけ：高さの中心が鍵盤2オクターブの真ん中に来るように
+    const voiced = snap.filter(m => m !== null).sort((a, b) => a - b);
+    const center = voiced[Math.floor(voiced.length / 2)];
     const shift = Math.round((melodyBase() + 12 - center) / 12) * 12;
 
-    // 6) 16分グリッドに寄せて音符として置く
-    let placed = 0, lastStep = 0;
-    notes.forEach(n => {
-      let s = Math.round((n.start - hum.t0) / sec16);
-      let e = Math.round((n.end - hum.t0) / sec16);
-      if (e <= s) e = s + 1;               // 短い音も最低16分音符1つぶん
-      if (placed > 0 && s - lastStep === 1) s = lastStep;  // 16分音符1つだけの隙間は埋める
-      s = Math.max(s, lastStep, 0);        // 前の音符と重ねない
-      e = Math.min(e, maxSteps);
-      if (s >= maxSteps || e <= s) return;
-      let row = n.m + shift - melodyBase();
-      if (row < 0) row += 12;
-      if (row > 24) row -= 12;
-      row = Math.max(0, Math.min(24, row));
-      placeNote(melEdit.cursor + s, row, Math.min(16, e - s), true, true);
-      lastStep = e;
-      placed++;
-    });
+    // 7) 同じ高さの連続を1つの音符にまとめて置く
+    let placed = 0, i = 0, lastEnd = 0;
+    while (i < snap.length) {
+      const m = snap[i];
+      let len = 1;
+      while (i + len < snap.length && snap[i + len] === m) len++;
+      if (m !== null) {
+        let row = m + shift - melodyBase();
+        if (row < 0) row += 12;
+        if (row > 24) row -= 12;
+        row = Math.max(0, Math.min(24, row));
+        placeNote(melEdit.cursor + i, row, Math.min(16, len), true, true);
+        placed++;
+        lastEnd = i + len;
+      }
+      i += len;
+    }
     if (placed > 0) {
-      melEdit.cursor = Math.min(melodySteps() - 1, melEdit.cursor + lastStep);
+      melEdit.cursor = Math.min(melodySteps() - 1, melEdit.cursor + lastEnd);
       renderMelody();
     }
     return placed;
@@ -1462,8 +1448,18 @@
     humRecord.classList.remove("recording");
     humNote.textContent = "─";
     if (commit) {
-      const n = humCommit();
-      if (n === 0) alert("音を検出できませんでした。マイクに近づいて、ゆっくりはっきり歌ってみてください");
+      let n = 0;
+      try {
+        n = humCommit();
+      } catch (err) {
+        // 万一解析でエラーが起きたら黙って終わらず内容を表示（原因特定用）
+        alert("解析でエラーが発生しました: " + err.message);
+        return;
+      }
+      if (n === 0) {
+        const voiced = hum.trace.filter(f => f.m !== null).length;
+        alert("音を検出できませんでした。マイクに近づいて、ゆっくりはっきり歌ってみてください\n（記録: " + hum.trace.length + "フレーム / 声と判定: " + voiced + "フレーム）");
+      }
     }
   }
 
