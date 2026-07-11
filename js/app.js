@@ -1223,32 +1223,56 @@
     if (humPanel.classList.contains("hidden")) humStop(false);
   });
 
-  // 波形の自己相関から音程（Hz）を推定（改良版：歌・ギター単音の音域70〜1000Hzだけを探す）
+  // 波形から音程（Hz）を推定。YIN方式：倍音につられてオクターブを間違えにくい定番アルゴリズム
   function detectPitch(buf, sampleRate, gate) {
     const SIZE = buf.length;
-    let norm = 0;
-    for (let i = 0; i < SIZE; i++) norm += buf[i] * buf[i];
-    const rms = Math.sqrt(norm / SIZE);
+    let sum0 = 0;
+    for (let i = 0; i < SIZE; i++) sum0 += buf[i] * buf[i];
+    const rms = Math.sqrt(sum0 / SIZE);
     if (rms < gate) return { rms: rms, hz: -1 };  // 環境ノイズより十分大きな音だけ音程を探す
-    const minLag = Math.floor(sampleRate / 1000);
-    const maxLag = Math.min(Math.floor(sampleRate / 70), SIZE - 2);  // 70Hzより下は電源ハム対策で見ない
-    const c = new Float32Array(maxLag + 2);
-    let bestLag = -1, bestVal = 0;
-    for (let lag = minLag; lag <= maxLag; lag++) {
-      let sum = 0;
-      for (let i = 0; i < SIZE - lag; i++) sum += buf[i] * buf[i + lag];
-      c[lag] = sum / (norm * (SIZE - lag) / SIZE);  // 正規化：きれいな周期なら1.0付近
-      if (c[lag] > bestVal) { bestVal = c[lag]; bestLag = lag; }
+    const half = SIZE >> 1;
+    const minTau = Math.floor(sampleRate / 1000);                    // 1000Hzより高い音は見ない
+    const maxTau = Math.min(Math.floor(sampleRate / 70), half - 2);  // 70Hzより低い音も見ない（電源ハム対策）
+    // 差分関数：波形をτだけずらして重ねたときの「ズレの大きさ」
+    const d = new Float32Array(maxTau + 2);
+    for (let tau = 1; tau <= maxTau + 1; tau++) {
+      let s = 0;
+      for (let i = 0; i < half; i++) {
+        const diff = buf[i] - buf[i + tau];
+        s += diff * diff;
+      }
+      d[tau] = s;
     }
-    if (bestLag < 0 || bestVal < 0.5) return { rms: rms, hz: -1 };  // 周期性が弱い＝音程なし（ノイズ）
-    // 1オクターブ低く誤検出する癖の補正：半分の周期でも相関が強ければ高い方を採用
-    const half = Math.round(bestLag / 2);
-    if (half >= minLag && c[half] > bestVal * 0.93) bestLag = half;  // 確信が強いときだけ
-    // となりの相関値と放物線補間して周期を小数精度に
-    let T0 = bestLag;
-    const x1 = c[bestLag - 1] || 0, x2 = c[bestLag], x3 = c[bestLag + 1] || 0;
+    // 累積平均で正規化（小さいτほど有利になる偏りをなくす）
+    const cm = new Float32Array(maxTau + 2);
+    cm[0] = 1;
+    let run = 0;
+    for (let tau = 1; tau <= maxTau + 1; tau++) {
+      run += d[tau];
+      cm[tau] = d[tau] * tau / run;
+    }
+    // しきい値を最初に下回った谷＝基音の周期（倍音の谷より先に見つかるのがミソ）
+    let tau = -1;
+    for (let t = minTau; t <= maxTau; t++) {
+      if (cm[t] < 0.15) {
+        while (t + 1 <= maxTau && cm[t + 1] < cm[t]) t++;
+        tau = t;
+        break;
+      }
+    }
+    if (tau < 0) {
+      // はっきりした谷がなければ、いちばん深い谷がそこそこ深いときだけ採用
+      let best = 0.3;
+      for (let t = minTau; t <= maxTau; t++) {
+        if (cm[t] < best) { best = cm[t]; tau = t; }
+      }
+      if (tau < 0) return { rms: rms, hz: -1 };
+    }
+    // となりの値と放物線補間して周期を小数精度に
+    const x1 = cm[tau - 1], x2 = cm[tau], x3 = cm[tau + 1];
     const a = (x1 + x3 - 2 * x2) / 2, b = (x3 - x1) / 2;
-    if (a) T0 = bestLag - b / (2 * a);
+    let T0 = tau;
+    if (a) T0 = tau - b / (2 * a);
     return { rms: rms, hz: sampleRate / T0 };
   }
 
@@ -1295,16 +1319,19 @@
       return { t: f.t, m: win[Math.floor(win.length / 2)] };
     });
 
-    // 2) オクターブ飛び補正：直前の声の高さから8半音を超えて飛んだら
-    //    倍音の誤検出とみなして近いオクターブに読み替える（メロディはつながっている前提）
-    let prev = null;
+    // 2) オクターブ飛び補正：直近数フレームの中央値からほぼオクターブ飛んだら読み替える
+    //    （1フレームの外れ値に引きずられて全体がズレていくのを防ぐため、中央値を基準にする）
+    const recent = [];
     sm.forEach(f => {
       if (f.m === null) return;
-      if (prev !== null) {
-        while (f.m - prev > 8) f.m -= 12;
-        while (prev - f.m > 8) f.m += 12;
+      if (recent.length >= 3) {
+        const rs = recent.slice().sort((a, b) => a - b);
+        const ref = rs[Math.floor(rs.length / 2)];
+        while (f.m - ref > 9) f.m -= 12;
+        while (ref - f.m > 9) f.m += 12;
       }
-      prev = f.m;
+      recent.push(f.m);
+      if (recent.length > 5) recent.shift();
     });
 
     // 3) 16分ステップごとに「そのステップで鳴っていた高さの中央値」を求める
