@@ -1302,9 +1302,9 @@
   }
 
   function humCommit() {
-    // 録音した音程の軌跡をストップ後にまとめて解析する（歌の揺れに強い）
-    const sec16 = 60 / Sequencer.getBpm() / 4;
-    const maxSteps = melodySteps() - melEdit.cursor;
+    // 録音した音程の軌跡をストップ後にまとめて解析する。
+    // リズム無視モード：タイミングは見ず「音の並び」だけを拾い、8分音符ずつ等間隔に置く。
+    // （テンポの揺れでメロディが崩れるのを防ぐ。リズムはピアノロールであとから手直し）
     const tr = hum.trace;
     if (!tr.length) return 0;
 
@@ -1335,63 +1335,64 @@
       if (recent.length > 5) recent.shift();
     });
 
-    // 3) 16分ステップごとに「そのステップで鳴っていた高さ（小数）の中央値」を求める
-    const steps = [];
-    for (let s = 0; s < maxSteps; s++) {
-      const t1 = hum.t0 + s * sec16, t2 = t1 + sec16;
-      const frames = sm.filter(f => f.t >= t1 && f.t < t2);
-      if (frames.length === 0) break;  // 録音はここで終わっている
-      const ms = frames.filter(f => f.m !== null).map(f => f.m);
-      // 3分の1以上鳴っていれば「音のあるステップ」とみなす（息の弱まりで欠けない）
-      steps.push(ms.length * 3 >= frames.length ? median(ms) : null);
+    // 3) 短い区間（約0.09秒＝3フレーム）ごとに高さの中央値を取る
+    const CHUNK = 3;
+    const chunks = [];
+    for (let i = 0; i < sm.length; i += CHUNK) {
+      const part = sm.slice(i, i + CHUNK);
+      const ms = part.filter(f => f.m !== null).map(f => f.m);
+      chunks.push(ms.length * 2 >= part.length ? median(ms) : null);
     }
+    const voicedRaw = chunks.filter(m => m !== null);
+    if (!voicedRaw.length) return 0;
 
     // 4) 歌全体のチューニングのズレ（半音未満）を測って引いてから半音に丸め、
     //    キーのスケール音に半音だけ寄せる（丸めこみで音の動きが消えにくくなる）
-    const voicedRaw = steps.filter(m => m !== null);
-    if (!voicedRaw.length) return 0;
     const offset = median(voicedRaw.map(m => m - Math.round(m)));
     const inScale = scaleSet();
-    const snap = steps.map(m => {
+    const q = chunks.map(m => {
       if (m === null) return null;
-      let q = Math.round(m - offset);
-      const pc = ((q % 12) + 12) % 12;
+      let v = Math.round(m - offset);
+      const pc = ((v % 12) + 12) % 12;
       if (!inScale[pc]) {
-        if (inScale[(pc + 1) % 12]) q += 1;
-        else if (inScale[(pc + 11) % 12]) q -= 1;
+        if (inScale[(pc + 1) % 12]) v += 1;
+        else if (inScale[(pc + 11) % 12]) v -= 1;
       }
-      return q;
+      return v;
     });
 
-    // 5) 1ステップだけの穴は埋める（高さの動きはならさず、途切れだけ直す）
-    for (let i = 1; i < snap.length - 1; i++) {
-      if (snap[i] === null && snap[i - 1] !== null && snap[i + 1] !== null) snap[i] = snap[i - 1];
+    // 5) 同じ高さの連続を1つの音にまとめて「音の並び」を作る。
+    //    1区間（約0.1秒未満）しか続かない音は誤検出として捨てる
+    const seq = [];
+    let idx = 0;
+    while (idx < q.length) {
+      const m = q[idx];
+      let run = 1;
+      while (idx + run < q.length && q[idx + run] === m) run++;
+      if (m !== null && run >= 2) seq.push(m);
+      idx += run;
     }
+    if (!seq.length) return 0;
 
     // 6) オクターブ調整は全体で1回だけ：高さの中心が鍵盤2オクターブの真ん中に来るように
-    const voiced = snap.filter(m => m !== null).sort((a, b) => a - b);
-    const center = voiced[Math.floor(voiced.length / 2)];
+    const sortedSeq = seq.slice().sort((a, b) => a - b);
+    const center = sortedSeq[Math.floor(sortedSeq.length / 2)];
     const shift = Math.round((melodyBase() + 12 - center) / 12) * 12;
 
-    // 7) 同じ高さの連続を1つの音符にまとめて置く
-    let placed = 0, i = 0, lastEnd = 0;
-    while (i < snap.length) {
-      const m = snap[i];
-      let len = 1;
-      while (i + len < snap.length && snap[i + len] === m) len++;
-      if (m !== null) {
-        let row = m + shift - melodyBase();
-        if (row < 0) row += 12;
-        if (row > 24) row -= 12;
-        row = Math.max(0, Math.min(24, row));
-        placeNote(melEdit.cursor + i, row, Math.min(16, len), true, true);
-        placed++;
-        lastEnd = i + len;
-      }
-      i += len;
+    // 7) 音の並びをそのまま、入力位置から8分音符ずつ順番に置く
+    let placed = 0;
+    for (const m of seq) {
+      const step = melEdit.cursor + placed * 2;
+      if (step + 2 > melodySteps()) break;  // ピアノロールの終わりで打ち切り
+      let row = m + shift - melodyBase();
+      if (row < 0) row += 12;
+      if (row > 24) row -= 12;
+      row = Math.max(0, Math.min(24, row));
+      placeNote(step, row, 2, true, true);
+      placed++;
     }
     if (placed > 0) {
-      melEdit.cursor = Math.min(melodySteps() - 1, melEdit.cursor + lastEnd);
+      melEdit.cursor = Math.min(melodySteps() - 1, melEdit.cursor + placed * 2);
       renderMelody();
     }
     return placed;
