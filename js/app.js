@@ -1215,86 +1215,110 @@
   const humPanel = document.getElementById("hum-panel");
   const humRecord = document.getElementById("hum-record");
   const humNote = document.getElementById("hum-note");
-  const hum = { on: false, stream: null, analyser: null, buf: null,
-                timer: null, t0: 0, buckets: [] };
+  const hum = { on: false, stream: null, analyser: null, buf: null, timer: null,
+                t0: 0, events: [], cur: null, pend: null, quiet: 0 };
 
   humToggle.addEventListener("click", () => {
     humPanel.classList.toggle("hidden");
     if (humPanel.classList.contains("hidden")) humStop(false);
   });
 
-  // 波形の自己相関から音程（Hz）を推定する定番の方法（鼻歌・ギター単音向け）
-  function detectHz(buf, sampleRate) {
-    let SIZE = buf.length, rms = 0;
-    for (let i = 0; i < SIZE; i++) rms += buf[i] * buf[i];
-    if (Math.sqrt(rms / SIZE) < 0.012) return -1;  // 小さすぎる音は無音扱い
-    let r1 = 0, r2 = SIZE - 1;
-    for (let i = 0; i < SIZE / 2; i++) if (Math.abs(buf[i]) < 0.2) { r1 = i; break; }
-    for (let i = 1; i < SIZE / 2; i++) if (Math.abs(buf[SIZE - i]) < 0.2) { r2 = SIZE - i; break; }
-    const b = buf.slice(r1, r2), N = b.length;
-    if (N < 64) return -1;
-    const c = new Float32Array(N);
-    for (let lag = 0; lag < N; lag++) {
+  // 波形の自己相関から音程（Hz）を推定（改良版：歌・ギター単音の音域60〜1000Hzだけを探す）
+  function detectPitch(buf, sampleRate) {
+    const SIZE = buf.length;
+    let norm = 0;
+    for (let i = 0; i < SIZE; i++) norm += buf[i] * buf[i];
+    const rms = Math.sqrt(norm / SIZE);
+    if (rms < 0.005) return { rms: rms, hz: -1 };  // 小さな声も拾う（周期性でノイズと区別）
+    const minLag = Math.floor(sampleRate / 1000);
+    const maxLag = Math.min(Math.floor(sampleRate / 60), SIZE - 2);
+    const c = new Float32Array(maxLag + 2);
+    let bestLag = -1, bestVal = 0;
+    for (let lag = minLag; lag <= maxLag; lag++) {
       let sum = 0;
-      for (let i = 0; i < N - lag; i++) sum += b[i] * b[i + lag];
-      c[lag] = sum;
+      for (let i = 0; i < SIZE - lag; i++) sum += buf[i] * buf[i + lag];
+      c[lag] = sum / (norm * (SIZE - lag) / SIZE);  // 正規化：きれいな周期なら1.0付近
+      if (c[lag] > bestVal) { bestVal = c[lag]; bestLag = lag; }
     }
-    let d = 0;
-    while (d < N - 1 && c[d] > c[d + 1]) d++;
-    let maxval = -1, maxpos = -1;
-    for (let i = d; i < N; i++) if (c[i] > maxval) { maxval = c[i]; maxpos = i; }
-    if (maxpos <= 0) return -1;
-    let T0 = maxpos;
-    const x1 = c[T0 - 1] || 0, x2 = c[T0], x3 = c[T0 + 1] || 0;
-    const a = (x1 + x3 - 2 * x2) / 2, bb = (x3 - x1) / 2;
-    if (a) T0 = T0 - bb / (2 * a);  // となりとの放物線補間で精度を上げる
-    const hz = sampleRate / T0;
-    return (hz >= 60 && hz <= 1200) ? hz : -1;  // 歌・ギター単音の音域だけ採用
+    if (bestLag < 0 || bestVal < 0.4) return { rms: rms, hz: -1 };  // 周期性が弱い＝音程なし（ノイズ）
+    // 1オクターブ低く誤検出する癖の補正：半分の周期でも相関が強ければ高い方を採用
+    const half = Math.round(bestLag / 2);
+    if (half >= minLag && c[half] > bestVal * 0.85) bestLag = half;
+    // となりの相関値と放物線補間して周期を小数精度に
+    let T0 = bestLag;
+    const x1 = c[bestLag - 1] || 0, x2 = c[bestLag], x3 = c[bestLag + 1] || 0;
+    const a = (x1 + x3 - 2 * x2) / 2, b = (x3 - x1) / 2;
+    if (a) T0 = bestLag - b / (2 * a);
+    return { rms: rms, hz: sampleRate / T0 };
   }
 
   function humTick() {
     const c = AudioEngine.ensureCtx();
     hum.analyser.getFloatTimeDomainData(hum.buf);
-    const hz = detectHz(hum.buf, c.sampleRate);
-    const midi = hz > 0 ? Math.round(69 + 12 * Math.log2(hz / 440)) : null;
+    const p = detectPitch(hum.buf, c.sampleRate);
+    let midi = p.hz > 0 ? Math.round(69 + 12 * Math.log2(p.hz / 440)) : null;
+    // 直前の音からほぼオクターブ（11〜13半音）飛んだら倍音の誤検出とみなして寄せる
+    const ref = hum.cur ? hum.cur.midi
+      : hum.events.length ? hum.events[hum.events.length - 1].midi : null;
+    if (midi !== null && ref !== null) {
+      if (midi - ref >= 11 && midi - ref <= 13) midi -= 12;
+      else if (ref - midi >= 11 && ref - midi <= 13) midi += 12;
+    }
     humNote.textContent = midi === null ? "─" : noteLabel(midi);
     if (c.currentTime < hum.t0) { humRecord.textContent = "🎙 カウント中…"; return; }
+    const now = c.currentTime;
     const sec16 = 60 / Sequencer.getBpm() / 4;
-    const step = Math.floor((c.currentTime - hum.t0) / sec16);
-    const maxSteps = melodySteps() - melEdit.cursor;
-    if (step >= maxSteps) { humStop(true); return; }  // メロディの終わりで自動ストップ
+    const step = Math.floor((now - hum.t0) / sec16);
+    if (step >= melodySteps() - melEdit.cursor) { humStop(true); return; }  // 終わりで自動ストップ
     humRecord.textContent = "■ ストップ（" + (Math.floor((melEdit.cursor + step) / 16) + 1) + "小節目を録音中）";
-    (hum.buckets[step] = hum.buckets[step] || []).push(midi);
+
+    if (midi === null) {
+      // 息つぎ・子音などの短い無音（約0.15秒まで）は前の音が続いているとみなしてつなぐ
+      hum.quiet++;
+      hum.pend = null;
+      if (hum.cur && hum.quiet >= 5) {
+        hum.cur.end = now - 0.15;
+        hum.events.push(hum.cur);
+        hum.cur = null;
+      }
+      return;
+    }
+    hum.quiet = 0;
+    if (hum.cur && midi === hum.cur.midi) { hum.pend = null; return; }  // 同じ音が続いている
+    // 違う音は約0.1秒続いてはじめて切り替える（ビブラートや揺れでぶつ切りにしない）
+    if (hum.pend && hum.pend.midi === midi) {
+      hum.pend.n++;
+      if (hum.pend.n >= 3) {
+        if (hum.cur) { hum.cur.end = hum.pend.at; hum.events.push(hum.cur); }
+        hum.cur = { midi: midi, start: hum.pend.at, end: 0 };
+        hum.pend = null;
+      }
+    } else {
+      hum.pend = { midi: midi, n: 1, at: now };
+    }
   }
 
   function humCommit() {
-    // 各16分ステップの多数決 → 同じ音の連続を1つの音符にまとめて置く
-    const steps = hum.buckets.map(list => {
-      const count = {};
-      let best = null, bestN = 0;
-      (list || []).forEach(m => {
-        const k = m === null ? "rest" : String(m);
-        count[k] = (count[k] || 0) + 1;
-        if (count[k] > bestN) { bestN = count[k]; best = k; }
-      });
-      return (best === null || best === "rest") ? null : Number(best);
+    // 音の区切り（イベント）を16分グリッドに寄せて音符として置く
+    const sec16 = 60 / Sequencer.getBpm() / 4;
+    const maxSteps = melodySteps() - melEdit.cursor;
+    let placed = 0, lastStep = 0;
+    hum.events.forEach(ev => {
+      let s = Math.round((ev.start - hum.t0) / sec16);
+      let e = Math.round((ev.end - hum.t0) / sec16);
+      if (e <= s) e = s + 1;               // 短い音も最低16分音符1つぶん
+      s = Math.max(s, lastStep, 0);        // 前の音符と重ねない
+      e = Math.min(e, maxSteps);
+      if (s >= maxSteps || e <= s) return;
+      let row = ev.midi - melodyBase();
+      while (row < 0) row += 12;           // 低すぎ・高すぎはオクターブを鍵盤の範囲に寄せる
+      while (row > 24) row -= 12;
+      placeNote(melEdit.cursor + s, row, Math.min(16, e - s), true, true);
+      lastStep = e;
+      placed++;
     });
-    let placed = 0, i = 0;
-    while (i < steps.length) {
-      const midi = steps[i];
-      let len = 1;
-      while (i + len < steps.length && steps[i + len] === midi) len++;
-      if (midi !== null) {
-        let row = midi - melodyBase();
-        while (row < 0) row += 12;    // 低すぎ・高すぎはオクターブを鍵盤の範囲に寄せる
-        while (row > 24) row -= 12;
-        placeNote(melEdit.cursor + i, row, Math.min(16, len), true, true);
-        placed++;
-      }
-      i += len;
-    }
     if (placed > 0) {
-      melEdit.cursor = Math.min(melodySteps() - 1, melEdit.cursor + steps.length);
+      melEdit.cursor = Math.min(melodySteps() - 1, melEdit.cursor + lastStep);
       renderMelody();
     }
     return placed;
@@ -1321,7 +1345,10 @@
     hum.analyser.fftSize = 2048;
     src.connect(hum.analyser);           // スピーカーには出さない（ハウリング防止）
     hum.buf = new Float32Array(hum.analyser.fftSize);
-    hum.buckets = [];
+    hum.events = [];
+    hum.cur = null;
+    hum.pend = null;
+    hum.quiet = 0;
     // カウント4つ（ピッ・ポッポッポッ）のあとに録音開始
     const spb = 60 / Sequencer.getBpm();
     const start = c.currentTime + 0.2;
@@ -1349,6 +1376,12 @@
     humRecord.textContent = "⏺ 録音スタート";
     humRecord.classList.remove("recording");
     humNote.textContent = "─";
+    if (hum.cur) {  // 鳴らしている途中でストップした音も確定する
+      hum.cur.end = AudioEngine.ensureCtx().currentTime;
+      hum.events.push(hum.cur);
+      hum.cur = null;
+    }
+    hum.pend = null;
     if (commit) {
       const n = humCommit();
       if (n === 0) alert("音を検出できませんでした。マイクに近づいて、ゆっくりはっきり歌ってみてください");
