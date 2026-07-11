@@ -1,6 +1,6 @@
 // ChordSketch - sw.js オフライン用キャッシュ（PWA）
 // コードを更新して公開し直すときは CACHE の番号を v2, v3… と上げる
-const CACHE = "chordsketch-v3";  // STEP9反映でv3に
+const CACHE = "chordsketch-v4";  // 鼻歌入力の精度改善でv4に
 const FILES = [
   "./",
   "./index.html",
