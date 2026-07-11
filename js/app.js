@@ -1216,22 +1216,22 @@
   const humRecord = document.getElementById("hum-record");
   const humNote = document.getElementById("hum-note");
   const hum = { on: false, stream: null, analyser: null, buf: null, timer: null,
-                t0: 0, events: [], cur: null, pend: null, quiet: 0 };
+                t0: 0, events: [], cur: null, pend: null, quiet: 0, noise: 0 };
 
   humToggle.addEventListener("click", () => {
     humPanel.classList.toggle("hidden");
     if (humPanel.classList.contains("hidden")) humStop(false);
   });
 
-  // 波形の自己相関から音程（Hz）を推定（改良版：歌・ギター単音の音域60〜1000Hzだけを探す）
-  function detectPitch(buf, sampleRate) {
+  // 波形の自己相関から音程（Hz）を推定（改良版：歌・ギター単音の音域70〜1000Hzだけを探す）
+  function detectPitch(buf, sampleRate, gate) {
     const SIZE = buf.length;
     let norm = 0;
     for (let i = 0; i < SIZE; i++) norm += buf[i] * buf[i];
     const rms = Math.sqrt(norm / SIZE);
-    if (rms < 0.005) return { rms: rms, hz: -1 };  // 小さな声も拾う（周期性でノイズと区別）
+    if (rms < gate) return { rms: rms, hz: -1 };  // 環境ノイズより十分大きな音だけ音程を探す
     const minLag = Math.floor(sampleRate / 1000);
-    const maxLag = Math.min(Math.floor(sampleRate / 60), SIZE - 2);
+    const maxLag = Math.min(Math.floor(sampleRate / 70), SIZE - 2);  // 70Hzより下は電源ハム対策で見ない
     const c = new Float32Array(maxLag + 2);
     let bestLag = -1, bestVal = 0;
     for (let lag = minLag; lag <= maxLag; lag++) {
@@ -1240,7 +1240,7 @@
       c[lag] = sum / (norm * (SIZE - lag) / SIZE);  // 正規化：きれいな周期なら1.0付近
       if (c[lag] > bestVal) { bestVal = c[lag]; bestLag = lag; }
     }
-    if (bestLag < 0 || bestVal < 0.4) return { rms: rms, hz: -1 };  // 周期性が弱い＝音程なし（ノイズ）
+    if (bestLag < 0 || bestVal < 0.6) return { rms: rms, hz: -1 };  // 周期性が弱い＝音程なし（ノイズ）。判定を厳しく
     // 1オクターブ低く誤検出する癖の補正：半分の周期でも相関が強ければ高い方を採用
     const half = Math.round(bestLag / 2);
     if (half >= minLag && c[half] > bestVal * 0.85) bestLag = half;
@@ -1255,7 +1255,8 @@
   function humTick() {
     const c = AudioEngine.ensureCtx();
     hum.analyser.getFloatTimeDomainData(hum.buf);
-    const p = detectPitch(hum.buf, c.sampleRate);
+    const gate = Math.max(0.01, hum.noise * 3);  // 環境ノイズの3倍より大きな音だけ拾う
+    const p = detectPitch(hum.buf, c.sampleRate, gate);
     let midi = p.hz > 0 ? Math.round(69 + 12 * Math.log2(p.hz / 440)) : null;
     // 直前の音からほぼオクターブ（11〜13半音）飛んだら倍音の誤検出とみなして寄せる
     const ref = hum.cur ? hum.cur.midi
@@ -1265,7 +1266,12 @@
       else if (ref - midi >= 11 && ref - midi <= 13) midi += 12;
     }
     humNote.textContent = midi === null ? "─" : noteLabel(midi);
-    if (c.currentTime < hum.t0) { humRecord.textContent = "🎙 カウント中…"; return; }
+    if (c.currentTime < hum.t0) {
+      // カウント中はまだ歌っていない前提で、環境ノイズの大きさを測っておく
+      hum.noise = hum.noise ? hum.noise * 0.8 + p.rms * 0.2 : p.rms;
+      humRecord.textContent = "🎙 カウント中…";
+      return;
+    }
     const now = c.currentTime;
     const sec16 = 60 / Sequencer.getBpm() / 4;
     const step = Math.floor((now - hum.t0) / sec16);
@@ -1349,6 +1355,7 @@
     hum.cur = null;
     hum.pend = null;
     hum.quiet = 0;
+    hum.noise = 0;
     // カウント4つ（ピッ・ポッポッポッ）のあとに録音開始
     const spb = 60 / Sequencer.getBpm();
     const start = c.currentTime + 0.2;
