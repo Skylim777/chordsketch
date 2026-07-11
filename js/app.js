@@ -1277,11 +1277,12 @@
   }
 
   function humTick() {
-    // 表示専用（解析には使わない）：いま聞こえている音の目安と経過秒数を出す
+    // 表示専用（解析には使わない）：いま聞こえている音の目安・マイク音量・経過秒数を出す
     const c = AudioEngine.ensureCtx();
     hum.analyser.getFloatTimeDomainData(hum.buf);
-    const p = detectPitch(hum.buf, c.sampleRate, 0.01);
-    humNote.textContent = p.hz > 0 ? noteLabel(Math.round(69 + 12 * Math.log2(p.hz / 440))) : "─";
+    const p = detectPitch(hum.buf, c.sampleRate, 0.002);
+    const lv = Math.min(100, Math.round(p.rms * 400));
+    humNote.textContent = (p.hz > 0 ? noteLabel(Math.round(69 + 12 * Math.log2(p.hz / 440))) : "─") + "　🔈" + lv + "%";
     const sec = c.currentTime - hum.recAt;
     if (sec >= 30) { humStop(true); return; }  // 長すぎる録音は自動ストップ
     humRecord.textContent = "■ ストップ（録音中 " + sec.toFixed(0) + "秒）";
@@ -1295,7 +1296,8 @@
 
     // 1) 波形を1本につない1/3に間引く（声の音域には十分で、解析が数倍速くなる）
     const total = hum.rec.reduce((a, b) => a + b.length, 0);
-    if (total < c.sampleRate * 0.3) return 0;
+    hum.diag = "録音: " + (total / c.sampleRate).toFixed(1) + "秒";
+    if (total < c.sampleRate * 0.3) return 0;  // 録音が短すぎる（波形が届いていない場合もここ）
     const raw = new Float32Array(total);
     let off = 0;
     hum.rec.forEach(b => { raw.set(b, off); off += b.length; });
@@ -1305,6 +1307,14 @@
       const j = i * 3;
       wave[i] = (raw[j] + raw[j + 1] + raw[j + 2]) / 3;
     }
+
+    // 1.5) 音量を自動調整（ノーマライズ）：マイク入力が小さくても拾えるようにする
+    let peak = 0;
+    for (let i = 0; i < wave.length; i++) { const a = Math.abs(wave[i]); if (a > peak) peak = a; }
+    hum.diag += " / 最大音量: " + Math.round(peak * 100) + "%";
+    if (peak < 0.001) return 0;  // ほぼ無音（マイクが音を拾えていない）
+    const gainFix = 0.9 / peak;
+    for (let i = 0; i < wave.length; i++) wave[i] *= gainFix;
 
     // 2) 約16ミリ秒ごとに窓を切って、音量と音程を測る（すき間なく均等に）
     const W = 1024, HOP = 256;
@@ -1317,7 +1327,7 @@
 
     // 3) 「静けさの基準」を録音全体から自動で決める（静かな下位2割の音量を物差しに）
     const rmsSorted = frames.map(f => f.rms).sort((a, b) => a - b);
-    const thr = Math.max(rmsSorted[Math.floor(rmsSorted.length * 0.2)] * 3, 0.004);
+    const thr = Math.max(rmsSorted[Math.floor(rmsSorted.length * 0.2)] * 3, 0.01);
     frames.forEach(f => { if (f.rms < thr) f.m = null; });
 
     // 4) 軽いメディアンフィルタ（前後1フレーム）で一瞬の誤検出だけ消す
@@ -1462,7 +1472,7 @@
         alert("解析でエラーが発生しました: " + err.message);
         return;
       }
-      if (n === 0) alert("音を検出できませんでした。マイクに近づいて、ゆっくりはっきり歌ってみてください");
+      if (n === 0) alert("音を検出できませんでした。\n（" + (hum.diag || "内訳不明") + "）\n・録音が0.0秒なら録音自体が動いていません\n・最大音量が5%未満ならマイクがほぼ拾えていません（別のマイクが選ばれている可能性）");
       else if (hum.lastSeq) humNote.textContent = "検出: " + hum.lastSeq;  // 拾った音の並びを表示
     }
     hum.rec = [];  // メモリ解放
