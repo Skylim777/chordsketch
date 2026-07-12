@@ -1327,7 +1327,7 @@
 
     // 4) 「声が出ているか」は音量だけで判定（静かな下位2割×2を基準に。小さい声も拾う）
     const rmsSorted = frames.map(f => f.rms).sort((a, b) => a - b);
-    const thr = Math.max(rmsSorted[Math.floor(rmsSorted.length * 0.2)] * 2, 0.01);
+    const thr = Math.max(rmsSorted[Math.floor(rmsSorted.length * 0.2)] * 1, 0.01);
 
     // 5) 息つぎ（無音）でだけ区切る。声が続いている間は1つの音。
     //    ただし高さが1.2半音以上変わった状態が6フレーム（約0.1秒）続いたらそこで分割
