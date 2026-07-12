@@ -1289,12 +1289,12 @@
   }
 
   function humCommit() {
-    // 0ベース作り直し版：録音しておいた生の波形全体を、ストップ後にまとめて解析する。
-    // タイマーの遅れや取りこぼしの影響を受けず、静けさの基準も録音全体から自動で決まる
+    // シンプル版：無音（息つぎ）で区切り、歌った長さ・間をそのまま16分に換算して置く。
+    // 細かい高さ判定でのぶつ切り・音ごとのオクターブ折り返しは廃止（上下の形をそのまま残す）
     const c = AudioEngine.ensureCtx();
     const median = arr => { const s = arr.slice().sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
 
-    // 1) 波形を1本につない1/3に間引く（声の音域には十分で、解析が数倍速くなる）
+    // 1) 波形を1本につないで1/3に間引く（声の音域には十分で、解析が数倍速くなる）
     const total = hum.rec.reduce((a, b) => a + b.length, 0);
     hum.diag = "録音: " + (total / c.sampleRate).toFixed(1) + "秒";
     if (total < c.sampleRate * 0.3) return 0;  // 録音が短すぎる（波形が届いていない場合もここ）
@@ -1308,7 +1308,7 @@
       wave[i] = (raw[j] + raw[j + 1] + raw[j + 2]) / 3;
     }
 
-    // 1.5) 音量を自動調整（ノーマライズ）：マイク入力が小さくても拾えるようにする
+    // 2) 音量を自動調整（ノーマライズ）：マイク入力が小さくても拾えるようにする
     let peak = 0;
     for (let i = 0; i < wave.length; i++) { const a = Math.abs(wave[i]); if (a > peak) peak = a; }
     hum.diag += " / 最大音量: " + Math.round(peak * 100) + "%";
@@ -1316,7 +1316,7 @@
     const gainFix = 0.9 / peak;
     for (let i = 0; i < wave.length; i++) wave[i] *= gainFix;
 
-    // 2) 約16ミリ秒ごとに窓を切って、音量と音程を測る（すき間なく均等に）
+    // 3) 約16ミリ秒ごとに窓を切って、音量と音程を測る（すき間なく均等に）
     const W = 1024, HOP = 256;
     const frames = [];
     for (let p = 0; p + W <= wave.length; p += HOP) {
@@ -1325,86 +1325,72 @@
     }
     if (!frames.length) return 0;
 
-    // 3) 「静けさの基準」を録音全体から自動で決める（静かな下位2割の音量を物差しに）
+    // 4) 「声が出ているか」は音量だけで判定（静かな下位2割×3を基準に）
     const rmsSorted = frames.map(f => f.rms).sort((a, b) => a - b);
     const thr = Math.max(rmsSorted[Math.floor(rmsSorted.length * 0.2)] * 3, 0.01);
-    frames.forEach(f => { if (f.rms < thr) f.m = null; });
 
-    // 4) 軽いメディアンフィルタ（前後1フレーム）で一瞬の誤検出だけ消す
-    const sm = frames.map((f, i) => {
-      if (f.m === null) return null;
-      const win = [];
-      for (let j = Math.max(0, i - 1); j <= Math.min(frames.length - 1, i + 1); j++) {
-        if (frames[j].m !== null) win.push(frames[j].m);
-      }
-      return median(win);
-    });
-
-    // 5) 「音」に区切る：0.8半音以上離れた状態が4フレーム（約64ミリ秒）続いたら新しい音。
-    //    無音でも区切る。5フレーム（約80ミリ秒）未満の短すぎる音は誤検出として捨てる
+    // 5) 息つぎ（無音）でだけ区切る。声が続いている間は1つの音。
+    //    ただし高さが1.2半音以上変わった状態が6フレーム（約0.1秒）続いたらそこで分割
     const rawNotes = [];  // { m: 高さ, s: 開始フレーム, e: 終了フレーム }
-    let note = null, cand = null;
-    const closeNote = end => {
-      if (note && end - note.s >= 5) rawNotes.push({ m: median(note.ms), s: note.s, e: end });
-      note = null;
+    let seg = null, drift = null;
+    const close = end => {
+      if (seg && end - seg.s >= 4 && seg.ms.length >= 2) {
+        rawNotes.push({ m: median(seg.ms), s: seg.s, e: end });
+      }
+      seg = null; drift = null;
     };
-    sm.forEach((m, i) => {
-      if (m === null) { closeNote(i); cand = null; return; }
-      if (!note) { note = { s: i, ms: [m] }; cand = null; return; }
-      if (Math.abs(m - median(note.ms)) < 0.8) { note.ms.push(m); cand = null; return; }
-      if (cand !== null && Math.abs(m - cand.m) < 0.8) {
-        cand.n++;
-        if (cand.n >= 4) { closeNote(cand.s); note = { s: cand.s, ms: [cand.m, m] }; cand = null; }
+    frames.forEach((f, i) => {
+      const on = f.rms >= thr && f.m !== null;
+      if (!on) { close(i); return; }
+      if (!seg) { seg = { s: i, ms: [f.m] }; return; }
+      if (Math.abs(f.m - median(seg.ms)) < 1.2) { seg.ms.push(f.m); drift = null; return; }
+      if (drift && Math.abs(f.m - median(drift.ms)) < 1.2) {
+        drift.ms.push(f.m);
+        if (i - drift.s + 1 >= 6) {           // 本当に高さが変わった：ここから新しい音
+          const d = drift;
+          close(d.s);
+          seg = { s: d.s, ms: d.ms.slice() };
+          drift = null;
+        }
       } else {
-        cand = { m: m, s: i, n: 1 };  // 1〜3フレームだけの外れ値は無視
+        drift = { s: i, ms: [f.m] };          // 一瞬の外れ値は無視
       }
     });
-    closeNote(sm.length);
+    close(frames.length);
     if (!rawNotes.length) return 0;
 
     // 6) 歌全体のチューニングのズレ（半音未満）を引いてから半音に丸める（キーの音への矯正はしない）
-    const offset = median(rawNotes.map(n => n.m - Math.round(n.m)));
-    rawNotes.forEach(n => { n.q = Math.round(n.m - offset); });
+    const offsetTune = median(rawNotes.map(n => n.m - Math.round(n.m)));
+    rawNotes.forEach(n => { n.q = Math.round(n.m - offsetTune); });
 
-    // 7) 隣どうしが同じ高さで隙間もほぼ無ければ1つにまとめる（揺れで割れていただけ）
-    const notes = [];
-    rawNotes.forEach(n => {
-      const prev = notes[notes.length - 1];
-      if (prev && prev.q === n.q && n.s - prev.e <= 3) prev.e = n.e;
-      else notes.push({ q: n.q, s: n.s, e: n.e });
-    });
-
-    // 8) オクターブ調整は全体で1回だけ：高さの中心が鍵盤2オクターブの真ん中に来るように
-    const qs = notes.map(n => n.q).sort((a, b) => a - b);
+    // 7) オクターブ調整は全体で1回だけ：高さの中心が鍵盤2オクターブの真ん中に来るように
+    const qs = rawNotes.map(n => n.q).sort((a, b) => a - b);
     const center = qs[Math.floor(qs.length / 2)];
     const shift = Math.round((melodyBase() + 12 - center) / 12) * 12;
 
     // 検出した並びを音名で覚えておく（ストップ後にパネルに表示して確認できるように）
-    hum.lastSeq = notes.map(n => noteLabel(n.q + shift)).join(" ");
+    hum.lastSeq = rawNotes.map(n => noteLabel(n.q + shift)).join(" ");
 
-    // 9) リズムは「最初の音」が基準：歌った長さ・間をそのまま16分単位に量子化して置く
+    // 8) 歌った長さ・間をそのまま16分に換算して、入力位置から順に置く（長さの上限なし）
     const secPerFrame = HOP / rate;
     const sec16 = 60 / Sequencer.getBpm() / 4;
-    const t0f = notes[0].s;
-    let placed = 0, lastEnd = 0;
-    for (const n of notes) {
-      let s = Math.round((n.s - t0f) * secPerFrame / sec16);
-      let e = Math.round((n.e - t0f) * secPerFrame / sec16);
-      if (s < lastEnd) s = lastEnd;          // 前の音符と重ねない
-      if (e <= s) e = s + 1;                 // 短い音も最低16分音符1つぶん
-      const step = melEdit.cursor + s;
-      if (step >= melodySteps()) break;      // ピアノロールの終わりで打ち切り
-      const len = Math.min(16, e - s, melodySteps() - step);
+    let step = melEdit.cursor;
+    let placed = 0;
+    let prevEndF = rawNotes[0].s;              // 最初の音の頭を基準に
+    for (const n of rawNotes) {
+      const gap = Math.round((n.s - prevEndF) * secPerFrame / sec16);         // 息つぎ＝休符
+      const len = Math.max(1, Math.round((n.e - n.s) * secPerFrame / sec16)); // 歌った長さそのまま
+      step += Math.max(0, gap);
+      if (step >= melodySteps()) break;        // ピアノロールの終わりで打ち切り
       let row = n.q + shift - melodyBase();
-      if (row < 0) row += 12;
-      if (row > 24) row -= 12;
-      row = Math.max(0, Math.min(24, row));
-      placeNote(step, row, len, true, true);
-      lastEnd = s + len;
+      row = Math.max(0, Math.min(24, row));    // はみ出しは端に寄せるだけ（折り返さない）
+      const use = placeNote(step, row, Math.min(len, melodySteps() - step), true, true);
+      step += use;
+      prevEndF = n.e;
       placed++;
     }
     if (placed > 0) {
-      melEdit.cursor = Math.min(melodySteps() - 1, melEdit.cursor + lastEnd);
+      melEdit.cursor = Math.min(melodySteps() - 1, step);
       renderMelody();
     }
     return placed;
