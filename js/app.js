@@ -1216,7 +1216,7 @@
   const humRecord = document.getElementById("hum-record");
   const humNote = document.getElementById("hum-note");
   const hum = { on: false, stream: null, src: null, node: null, sink: null,
-                analyser: null, buf: null, timer: null, rec: [], recAt: 0, lastSeq: "" };
+                analyser: null, buf: null, timer: null, rec: [], recAt: 0, started: false };
 
   humToggle.addEventListener("click", () => {
     humPanel.classList.toggle("hidden");
@@ -1277,12 +1277,21 @@
   }
 
   function humTick() {
-    // 表示専用（解析には使わない）：いま聞こえている音の目安・マイク音量・経過秒数を出す
+    // 表示はマイク音量の目安だけ（音名は出さない）。歌い始めを検出したところから録音開始扱いにする
     const c = AudioEngine.ensureCtx();
     hum.analyser.getFloatTimeDomainData(hum.buf);
     const p = detectPitch(hum.buf, c.sampleRate, 0.002);
     const lv = Math.min(100, Math.round(p.rms * 400));
-    humNote.textContent = (p.hz > 0 ? noteLabel(Math.round(69 + 12 * Math.log2(p.hz / 440))) : "─") + "　🔈" + lv + "%";
+    humNote.textContent = "🔈" + lv + "%";
+    if (!hum.started) {
+      if (p.hz > 0) {
+        hum.started = true;          // 音を検出：ここから録音開始扱い
+        hum.recAt = c.currentTime;
+      } else {
+        humRecord.textContent = "■ ストップ（音待ち…歌い始めてください）";
+        return;
+      }
+    }
     const sec = c.currentTime - hum.recAt;
     if (sec >= 30) { humStop(true); return; }  // 長すぎる録音は自動ストップ
     humRecord.textContent = "■ ストップ（録音中 " + sec.toFixed(0) + "秒）";
@@ -1325,7 +1334,7 @@
     }
     if (!frames.length) return 0;
 
-    // 4) 「声が出ているか」は音量だけで判定（静かな下位2割×2を基準に。小さい声も拾う）
+    // 4) 「声が出ているか」は音量だけで判定（静かな下位2割×0.9を基準に。小さい声もしっかり拾う）
     const rmsSorted = frames.map(f => f.rms).sort((a, b) => a - b);
     const thr = Math.max(rmsSorted[Math.floor(rmsSorted.length * 0.2)] * 0.9, 0.01);
 
@@ -1367,9 +1376,6 @@
     const qs = rawNotes.map(n => n.q).sort((a, b) => a - b);
     const center = qs[Math.floor(qs.length / 2)];
     const shift = Math.round((melodyBase() + 12 - center) / 12) * 12;
-
-    // 検出した並びを音名で覚えておく（ストップ後にパネルに表示して確認できるように）
-    hum.lastSeq = rawNotes.map(n => noteLabel(n.q + shift)).join(" ");
 
     // 8) 歌った長さ・間をそのまま16分に換算して、入力位置から順に置く（長さの上限なし）
     const secPerFrame = HOP / rate;
@@ -1418,6 +1424,8 @@
     hum.node = c.createScriptProcessor(4096, 1, 1);
     hum.node.onaudioprocess = e => {
       hum.rec.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+      // 音を検出するまでは直近の波形だけ残す（歌い出しの頭が切れないよう少しだけ保持）
+      if (!hum.started && hum.rec.length > 3) hum.rec.shift();
     };
     hum.sink = c.createGain();
     hum.sink.gain.value = 0;             // マイクの音はスピーカーに出さない（ハウリング防止）
@@ -1430,10 +1438,10 @@
     hum.src.connect(hum.analyser);
     hum.buf = new Float32Array(hum.analyser.fftSize);
     hum.recAt = c.currentTime;
-    hum.lastSeq = "";
+    hum.started = false;  // 音を検出したところから録音開始扱いにする
     hum.on = true;
     hum.timer = setInterval(humTick, 100);
-    humRecord.textContent = "■ ストップ（録音中）";
+    humRecord.textContent = "■ ストップ（音待ち…歌い始めてください）";
     humRecord.classList.add("recording");
   }
 
@@ -1459,7 +1467,6 @@
         return;
       }
       if (n === 0) alert("音を検出できませんでした。\n（" + (hum.diag || "内訳不明") + "）\n・録音が0.0秒なら録音自体が動いていません\n・最大音量が5%未満ならマイクがほぼ拾えていません（別のマイクが選ばれている可能性）");
-      else if (hum.lastSeq) humNote.textContent = "検出: " + hum.lastSeq;  // 拾った音の並びを表示
     }
     hum.rec = [];  // メモリ解放
   }
